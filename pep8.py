@@ -2,7 +2,7 @@
 # pep8.py - Check Python source code formatting, according to PEP 8
 # Copyright (C) 2006-2009 Johann C. Rocholl <johann@rocholl.net>
 # Copyright (C) 2009-2014 Florent Xicluna <florent.xicluna@gmail.com>
-# Copyright (C) 2014 Ian Lee <ianlee1521@gmail.com>
+# Copyright (C) 2014-2015 Ian Lee <ianlee1521@gmail.com>
 #
 # Permission is hereby granted, free of charge, to any person
 # obtaining a copy of this software and associated documentation files
@@ -62,18 +62,20 @@ try:
 except ImportError:
     from ConfigParser import RawConfigParser
 
-__version__ = '1.6.0a0'
+__version__ = '1.6.3a0'
 
 DEFAULT_EXCLUDE = '.svn,CVS,.bzr,.hg,.git,__pycache__,.tox'
 DEFAULT_IGNORE = 'E121,E123,E126,E226,E24,E704'
 try:
     if sys.platform == 'win32':
-        DEFAULT_CONFIG = os.path.expanduser(r'~\.pep8')
+        USER_CONFIG = os.path.expanduser(r'~\.pep8')
     else:
-        DEFAULT_CONFIG = os.path.join(os.getenv('XDG_CONFIG_HOME') or
-                                      os.path.expanduser('~/.config'), 'pep8')
+        USER_CONFIG = os.path.join(
+            os.getenv('XDG_CONFIG_HOME') or os.path.expanduser('~/.config'),
+            'pep8'
+        )
 except ImportError:
-    DEFAULT_CONFIG = None
+    USER_CONFIG = None
 
 PROJECT_CONFIG = ('setup.cfg', 'tox.ini', '.pep8')
 TESTSUITE_PATH = os.path.join(os.path.dirname(__file__), 'testsuite')
@@ -433,6 +435,7 @@ def continued_indentation(logical_line, tokens, indent_level, hang_closing,
     indent_chances = {}
     last_indent = tokens[0][2]
     visual_indent = None
+    last_token_multiline = False
     # for each depth, memorize the visual indent column
     indent = [last_indent[1]]
     if verbose >= 3:
@@ -512,8 +515,9 @@ def continued_indentation(logical_line, tokens, indent_level, hang_closing,
                 yield start, "%s continuation line %s" % error
 
         # look for visual indenting
-        if (parens[row] and token_type not in (tokenize.NL, tokenize.COMMENT)
-                and not indent[depth]):
+        if (parens[row] and
+                token_type not in (tokenize.NL, tokenize.COMMENT) and
+                not indent[depth]):
             indent[depth] = start[1]
             indent_chances[start[1]] = True
             if verbose >= 4:
@@ -972,10 +976,15 @@ def explicit_line_join(logical_line, tokens):
     Okay: aaa = [123,\n       123]
     Okay: aaa = ("bbb "\n       "ccc")
     Okay: aaa = "bbb " \\n    "ccc"
+    Okay: aaa = 123  # \\
     """
     prev_start = prev_end = parens = 0
+    comment = False
+    backslash = None
     for token_type, text, start, end, line in tokens:
-        if start[0] != prev_start and parens and backslash:
+        if token_type == tokenize.COMMENT:
+            comment = True
+        if start[0] != prev_start and parens and backslash and not comment:
             yield backslash, "E502 the backslash is redundant between brackets"
         if end[0] != prev_end:
             if line.rstrip('\r\n').endswith('\\'):
@@ -990,6 +999,45 @@ def explicit_line_join(logical_line, tokens):
                 parens += 1
             elif text in ')]}':
                 parens -= 1
+
+
+def break_around_binary_operator(logical_line, tokens):
+    r"""
+    Avoid breaks before binary operators.
+
+    The preferred place to break around a binary operator is after the
+    operator, not before it.
+
+    W503: (width == 0\n + height == 0)
+    W503: (width == 0\n and height == 0)
+
+    Okay: (width == 0 +\n height == 0)
+    Okay: foo(\n    -x)
+    Okay: foo(x\n    [])
+    Okay: x = '''\n''' + ''
+    Okay: foo(x,\n    -y)
+    Okay: foo(x,  # comment\n    -y)
+    """
+    def is_binary_operator(token_type, text):
+        # The % character is strictly speaking a binary operator, but the
+        # common usage seems to be to put it next to the format parameters,
+        # after a line break.
+        return ((token_type == tokenize.OP or text in ['and', 'or']) and
+                text not in "()[]{},:.;@=%")
+
+    line_break = False
+    unary_context = True
+    for token_type, text, start, end, line in tokens:
+        if token_type == tokenize.COMMENT:
+            continue
+        if ('\n' in text or '\r' in text) and token_type != tokenize.STRING:
+            line_break = True
+        else:
+            if (is_binary_operator(token_type, text) and line_break and
+                    not unary_context):
+                yield start, "W503 line break before binary operator"
+            unary_context = text in '([{,;'
+            line_break = False
 
 
 def comparison_to_singleton(logical_line, noqa):
@@ -1047,7 +1095,7 @@ def comparison_negative(logical_line):
             yield pos, "E714 test for object identity should be 'is not'"
 
 
-def comparison_type(logical_line):
+def comparison_type(logical_line, noqa):
     r"""Object type comparisons should always use isinstance().
 
     Do not compare types directly.
@@ -1063,7 +1111,7 @@ def comparison_type(logical_line):
     Okay: if type(a1) is type(b1):
     """
     match = COMPARE_TYPE_REGEX.search(logical_line)
-    if match:
+    if match and not noqa:
         inst = match.group(1)
         if inst and isidentifier(inst) and inst not in SINGLETONS:
             return  # Allow comparison for types which are not obvious
@@ -1407,8 +1455,8 @@ class Checker(object):
                 (start_row, start_col) = start
                 if prev_row != start_row:    # different row
                     prev_text = self.lines[prev_row - 1][prev_col - 1]
-                    if prev_text == ',' or (prev_text not in '{[('
-                                            and text not in '}])'):
+                    if prev_text == ',' or (prev_text not in '{[(' and
+                                            text not in '}])'):
                         text = ' ' + text
                 elif prev_col != start_col:  # different column
                     text = line[prev_col:start_col] + text
@@ -1700,6 +1748,14 @@ class StandardReport(BaseReport):
                 print(re.sub(r'\S', ' ', line[:offset]) + '^')
             if self._show_pep8 and doc:
                 print('    ' + doc.strip())
+
+            # stdout is block buffered when not stdout.isatty().
+            # line can be broken where buffer boundary since other processes
+            # write to same file.
+            # flush() after print() to avoid buffer boundary.
+            # Typical buffer size is 8192. line written safely when
+            # len(line) < 8192.
+            sys.stdout.flush()
         return self.file_errors
 
 
@@ -1723,7 +1779,7 @@ class StyleGuide(object):
         # build options from the command line
         self.checker_class = kwargs.pop('checker_class', Checker)
         parse_argv = kwargs.pop('parse_argv', False)
-        config_file = kwargs.pop('config_file', None)
+        config_file = kwargs.pop('config_file', False)
         parser = kwargs.pop('parser', None)
         # build options from dict
         options_dict = dict(*args, **kwargs)
@@ -1913,24 +1969,39 @@ def get_parser(prog='pep8', version=__version__):
 
 
 def read_config(options, args, arglist, parser):
-    """Read both user configuration and local configuration."""
+    """Read and parse configurations
+
+    If a config file is specified on the command line with the "--config"
+    option, then only it is used for configuration.
+
+    Otherwise, the user configuration (~/.config/pep8) and any local
+    configurations in the current directory or above will be merged together
+    (in that order) using the read method of ConfigParser.
+    """
     config = RawConfigParser()
 
-    user_conf = options.config
-    if user_conf and os.path.isfile(user_conf):
-        if options.verbose:
-            print('user configuration: %s' % user_conf)
-        config.read(user_conf)
+    cli_conf = options.config
 
     local_dir = os.curdir
+
+    if USER_CONFIG and os.path.isfile(USER_CONFIG):
+        if options.verbose:
+            print('user configuration: %s' % USER_CONFIG)
+        config.read(USER_CONFIG)
+
     parent = tail = args and os.path.abspath(os.path.commonprefix(args))
     while tail:
-        if config.read([os.path.join(parent, fn) for fn in PROJECT_CONFIG]):
+        if config.read(os.path.join(parent, fn) for fn in PROJECT_CONFIG):
             local_dir = parent
             if options.verbose:
                 print('local configuration: in %s' % parent)
             break
         (parent, tail) = os.path.split(parent)
+
+    if cli_conf and os.path.isfile(cli_conf):
+        if options.verbose:
+            print('cli configuration: %s' % cli_conf)
+        config.read(cli_conf)
 
     pep8_section = parser.prog
     if config.has_section(pep8_section):
@@ -1968,19 +2039,21 @@ def read_config(options, args, arglist, parser):
 
 def process_options(arglist=None, parse_argv=False, config_file=None,
                     parser=None):
-    """Process options passed either via arglist or via command line args."""
+    """Process options passed either via arglist or via command line args.
+
+    Passing in the ``config_file`` parameter allows other tools, such as flake8
+    to specify their own options to be processed in pep8.
+    """
     if not parser:
         parser = get_parser()
     if not parser.has_option('--config'):
-        if config_file is True:
-            config_file = DEFAULT_CONFIG
         group = parser.add_option_group("Configuration", description=(
             "The project options are read from the [%s] section of the "
             "tox.ini file or the setup.cfg file located in any parent folder "
             "of the path(s) being processed.  Allowed options are: %s." %
             (parser.prog, ', '.join(parser.config_options))))
         group.add_option('--config', metavar='path', default=config_file,
-                         help="user config file location (default: %default)")
+                         help="user config file location")
     # Don't read the command line if the module is used as a library.
     if not arglist and not parse_argv:
         arglist = []
@@ -2025,7 +2098,7 @@ def _main():
     except AttributeError:
         pass    # not supported on Windows
 
-    pep8style = StyleGuide(parse_argv=True, config_file=True)
+    pep8style = StyleGuide(parse_argv=True)
     options = pep8style.options
     if options.doctest or options.testsuite:
         from testsuite.support import run_tests
