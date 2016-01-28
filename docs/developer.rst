@@ -11,13 +11,28 @@ Source code
 The source code is currently `available on GitHub`_ under the terms and
 conditions of the :ref:`Expat license <license>`.  Fork away!
 
-* `Source code <https://github.com/jcrocholl/pep8>`_ and
-  `issue tracker <https://github.com/jcrocholl/pep8/issues>`_ on GitHub.
-* `Continuous tests <http://travis-ci.org/jcrocholl/pep8>`_ against Python
+* `Source code <https://github.com/pycqa/pep8>`_ and
+  `issue tracker <https://github.com/pycqa/pep8/issues>`_ on GitHub.
+* `Continuous tests <http://travis-ci.org/pycqa/pep8>`_ against Python
   2.6 through 3.4 and PyPy, on `Travis-CI platform
   <http://about.travis-ci.org/>`_.
 
-.. _available on GitHub: https://github.com/jcrocholl/pep8
+.. _available on GitHub: https://github.com/pycqa/pep8
+
+
+Direction
+~~~~~~~~~
+
+Some high-level aims and directions to bear in mind for contributions:
+
+* ``pep8`` is intended to be as fast as possible.
+  Using the ``ast`` module defeats that purpose.
+  The `pep8-naming <https://github.com/flintwork/pep8-naming>`_ plugin exists for this sort of functionality.
+* If you want to provide extensibility / plugins,
+  please see `flake8 <https://gitlab.com/pycqa/flake8>`_ -
+  ``pep8`` doesn't want or need a plugin architecture.
+* Python 2.6 support is still deemed important.
+* ``pep8`` aims to have no external dependencies.
 
 
 Contribute
